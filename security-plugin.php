@@ -2,7 +2,7 @@
 /*
 Plugin Name: Enhanced Security Plugin
 Description: Comprehensive security plugin with URL exclusion, blocking, SEO features, anti-spam protection, bot protection, and ModSecurity integration
-Version: 3.9
+Version: 3.9.3
 Author: Your Name
 */
 
@@ -11,23 +11,81 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-// CRITICAL: Load API whitelist FIRST - before any security components
+// CRITICAL: Load Shiprocket complete bypass FIRST - before ANYTHING else
+require_once plugin_dir_path(__FILE__) . 'includes/shiprocket-complete-bypass.php';
+
+// CRITICAL: Check if security should be completely disabled
+if (defined('SECURITY_PLUGIN_DISABLED') && SECURITY_PLUGIN_DISABLED) {
+    // Security plugin is completely disabled for this request
+    // But still allow admin access for settings
+    if (is_admin()) {
+        require_once plugin_dir_path(__FILE__) . 'includes/class-settings.php';
+        
+        class MinimalSecurityPlugin {
+            public function __construct() {
+                add_action('admin_menu', array($this, 'add_admin_menu'));
+                add_action('admin_notices', array($this, 'show_bypass_notice'));
+            }
+            
+            public function add_admin_menu() {
+                add_menu_page(
+                    'Security Settings',
+                    'Security Settings',
+                    'manage_options',
+                    'security-settings',
+                    array($this, 'render_bypass_page'),
+                    'dashicons-shield',
+                    30
+                );
+            }
+            
+            public function show_bypass_notice() {
+                echo '<div class="notice notice-warning"><p><strong>🚨 SECURITY BYPASS ACTIVE:</strong> The security plugin is completely disabled for Shiprocket authentication. This is normal during API connections.</p></div>';
+            }
+            
+            public function render_bypass_page() {
+                ?>
+                <div class="wrap">
+                    <h1>Security Plugin - Bypass Mode</h1>
+                    <div class="notice notice-warning">
+                        <p><strong>🚨 BYPASS MODE ACTIVE</strong></p>
+                        <p>The security plugin is currently in bypass mode for Shiprocket authentication.</p>
+                        <p>This is normal and temporary during API connections.</p>
+                    </div>
+                    <p>The security plugin will resume normal operation after the API connection is complete.</p>
+                </div>
+                <?php
+            }
+        }
+        
+        new MinimalSecurityPlugin();
+    }
+    return; // Exit early
+}
+
+// CRITICAL: Load other Shiprocket fixes
+require_once plugin_dir_path(__FILE__) . 'includes/shiprocket-auth-fix.php';
+require_once plugin_dir_path(__FILE__) . 'includes/woocommerce-auth-bypass.php';
+
+// CRITICAL: Load API whitelist
 require_once plugin_dir_path(__FILE__) . 'includes/shiprocket-whitelist.php';
 
-// Load components
-require_once plugin_dir_path(__FILE__) . 'includes/class-waf.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-headers.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-cookie-consent.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-sanitization.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-feature-manager.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-seo-manager.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-bot-blackhole.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-bot-blocker.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-bot-dashboard.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-bot-settings.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-modsecurity-manager.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-settings.php';
-require_once plugin_dir_path(__FILE__) . 'includes/emergency-unblock.php';
+// Load components only if not bypassed
+if (!defined('SHIPROCKET_BYPASS_ACTIVE') || !SHIPROCKET_BYPASS_ACTIVE) {
+    require_once plugin_dir_path(__FILE__) . 'includes/class-waf.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-headers.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-cookie-consent.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-sanitization.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-feature-manager.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-seo-manager.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-bot-blackhole.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-bot-blocker.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-bot-dashboard.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-bot-settings.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-modsecurity-manager.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/class-settings.php';
+    require_once plugin_dir_path(__FILE__) . 'includes/emergency-unblock.php';
+}
 
 class CustomSecurityPlugin {
     private $waf;
@@ -49,6 +107,11 @@ class CustomSecurityPlugin {
     private $current_user_can_manage = null;
     
     public function __construct() {
+        // CRITICAL: Check if security is completely disabled
+        if (defined('SECURITY_PLUGIN_DISABLED') && SECURITY_PLUGIN_DISABLED) {
+            return; // Don't initialize anything
+        }
+        
         // Don't call WordPress functions here - they're not available yet
         
         // Hook into WordPress initialization - wait for WordPress to load
@@ -90,6 +153,11 @@ class CustomSecurityPlugin {
     }
 
     public function init_user_checks() {
+        // CRITICAL: Check if security is disabled
+        if (defined('SECURITY_PLUGIN_DISABLED') && SECURITY_PLUGIN_DISABLED) {
+            return;
+        }
+        
         // Now WordPress functions are available - initialize user checks
         $this->is_admin = is_admin();
         $this->is_logged_in = is_user_logged_in();
@@ -97,6 +165,11 @@ class CustomSecurityPlugin {
     }
 
     public function init_seo_manager() {
+        // CRITICAL: Check if security is disabled
+        if (defined('SECURITY_PLUGIN_DISABLED') && SECURITY_PLUGIN_DISABLED) {
+            return;
+        }
+        
         // CRITICAL: Initialize SEO Manager FIRST with highest priority
         if (get_option('security_enable_seo_features', true)) {
             $this->seo_manager = new SEOManager();
@@ -143,8 +216,8 @@ class CustomSecurityPlugin {
                 echo '<div class="notice notice-info"><p><strong>📊 LIVE TRACKING DISABLED:</strong> Enable Live Traffic Tracking in Bot Protection settings to monitor visitor activity in real-time.</p></div>';
             }
             
-            // Show API protection notice
-            echo '<div class="notice notice-success"><p><strong>🚀 API PROTECTION:</strong> Shiprocket, Google Merchant Center, and WooCommerce API requests are automatically whitelisted and bypass all security checks. CORS headers are configured for cross-origin requests.</p></div>';
+            // Show SURGICAL Shiprocket bypass notice
+            echo '<div class="notice notice-success"><p><strong>🚀 SURGICAL SHIPROCKET BYPASS:</strong> Intelligent security bypass system is active. Only security components are disabled for Shiprocket/API requests. WordPress core functions remain intact.</p></div>';
             
             // Show real user protection notice
             echo '<div class="notice notice-info"><p><strong>🛡️ REAL USER PROTECTION:</strong> If legitimate users are blocked, use the emergency unblock URL or whitelist their IP in Bot Protection settings.</p></div>';
@@ -153,7 +226,7 @@ class CustomSecurityPlugin {
 
     public function check_database_updates() {
         $db_version = get_option('security_plugin_db_version', '1.0');
-        $current_version = '3.9';
+        $current_version = '3.9.3';
         
         if (version_compare($db_version, $current_version, '<')) {
             $this->force_create_tables();
@@ -163,6 +236,11 @@ class CustomSecurityPlugin {
     }
 
     private function force_create_tables() {
+        // CRITICAL: Check if security is disabled
+        if (defined('SECURITY_PLUGIN_DISABLED') && SECURITY_PLUGIN_DISABLED) {
+            return;
+        }
+        
         // Force create/update bot protection table
         $bot_blackhole = new BotBlackhole();
         $bot_blackhole->ensure_table_exists();
@@ -351,7 +429,7 @@ class CustomSecurityPlugin {
             'security_protect_login' => false,
             'security_bot_whitelist_ips' => "103.251.55.45\n103.170.146.58\n127.0.0.1\n::1\n152.59.121.232", // BOTH IPs + real user IP whitelisted
             'security_bot_whitelist_agents' => $this->get_default_whitelist_bots(),
-            'security_plugin_db_version' => '3.9',
+            'security_plugin_db_version' => '3.9.3',
             // ENHANCED: Live tracking settings
             'security_enable_live_tracking' => true,  // NEW: Enable live tracking by default
             'security_track_all_visitors' => false,   // NEW: Don't track logged-in users by default
@@ -458,8 +536,12 @@ merchant';
     }
 
     public function init_components() {
-        // CRITICAL: Skip ALL security components if this is an API request
-        if (defined('API_REQUEST_WHITELISTED') && API_REQUEST_WHITELISTED) {
+        // CRITICAL: Skip ALL security components if this is an API request or Shiprocket request
+        if ((defined('API_REQUEST_WHITELISTED') && API_REQUEST_WHITELISTED) ||
+            (defined('SHIPROCKET_AUTH_REQUEST') && SHIPROCKET_AUTH_REQUEST) ||
+            (defined('WC_API_REQUEST') && WC_API_REQUEST) ||
+            (defined('SHIPROCKET_BYPASS_ACTIVE') && SHIPROCKET_BYPASS_ACTIVE) ||
+            (defined('SECURITY_PLUGIN_DISABLED') && SECURITY_PLUGIN_DISABLED)) {
             return; // Don't load any security components
         }
         
@@ -543,5 +625,7 @@ merchant';
     }
 }
 
-// Initialize the plugin
-new CustomSecurityPlugin();
+// Initialize the plugin only if not completely disabled
+if (!defined('SECURITY_PLUGIN_DISABLED') || !SECURITY_PLUGIN_DISABLED) {
+    new CustomSecurityPlugin();
+}
