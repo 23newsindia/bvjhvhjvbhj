@@ -15,6 +15,9 @@ class APIWhitelist {
         'shiprocket.in',
         'www.shiprocket.in',
         'sr-posthog.shiprocket.in',
+        'o4508657526439936.ingest.us.sentry.io', 
+        'nexus-websocket-b.intercom.io',         
+        'twk-lausanne.com', // Fixed domain (added .com)
         
         // Google domains
         'accounts.google.com',
@@ -25,19 +28,27 @@ class APIWhitelist {
         'shopping.googleapis.com',
         'jetpack.wordpress.com',
         'jetpack.com',
-        'public-api.wordpress.com'
+        'public-api.wordpress.com',
+        
+        // Additional domains
+        'form-ext.contlo.com',
+        '*.bewakoof.com'
     );
     
     private $api_ips = array(
-        // Add known API IP ranges if available
+        // Shiprocket IP ranges
         '52.66.0.0/16',
         '13.126.0.0/16',
-        '13.232.0.0/16'
+        '13.232.0.0/16',
+        '35.154.0.0/16',       
+        '3.7.0.0/16',
+        '15.207.0.0/16', // Additional Shiprocket range
+        '65.0.0.0/16'    // Additional range
     );
     
     public function __construct() {
         // Hook early to bypass all security checks for API requests
-        add_action('plugins_loaded', array($this, 'whitelist_api_requests'), 1); // Priority 1 - runs very early
+        add_action('plugins_loaded', array($this, 'whitelist_api_requests'), 1);
         
         // Handle OPTIONS requests for CORS
         add_action('init', array($this, 'handle_cors_preflight'), 0);
@@ -47,21 +58,13 @@ class APIWhitelist {
     }
     
     public function handle_cors_preflight() {
-        // Handle CORS preflight requests
         if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-            header('Access-Control-Allow-Origin: *');
-            header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-            header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-WP-Nonce');
-            header('Access-Control-Allow-Credentials: true');
-            header('Access-Control-Max-Age: 86400'); // Cache for 24 hours
-            
-            // Exit early for OPTIONS requests
+            $this->add_cors_headers(true);
             exit(0);
         }
     }
     
     public function whitelist_wc_admin_routes() {
-        // Whitelist specific WooCommerce admin routes
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
         
         $wc_admin_routes = array(
@@ -71,7 +74,8 @@ class APIWhitelist {
             '/wp-json/wc/v1/',
             '/wp-json/wc-admin/',
             '/wp-json/jetpack/',
-            '/wp-admin/admin.php?page=wc-admin'
+            '/wp-admin/admin.php?page=wc-admin',
+            '/wp-json/shiprocket/' // Added Shiprocket API endpoint
         );
         
         foreach ($wc_admin_routes as $route) {
@@ -84,97 +88,99 @@ class APIWhitelist {
     }
     
     public function whitelist_api_requests() {
-        // Check if this is an API request that should be whitelisted
         if ($this->is_api_request()) {
-            // Set flag to skip security checks
             define('API_REQUEST_WHITELISTED', true);
-            
-            // Add CORS headers immediately
             $this->add_cors_headers();
             
-            // Remove security hooks that might interfere
-            remove_action('init', array('SecurityWAF', 'waf_check'));
-            remove_action('init', array('BotBlackhole', 'check_bot_access'));
-            remove_action('init', array('BotBlocker', 'check_bot_request'));
-            
-            // Allow the request to proceed normally
-            return;
+            // Remove security hooks
+            $this->remove_security_hooks();
         }
     }
     
-    private function add_cors_headers() {
-        if (!headers_sent()) {
-            header('Access-Control-Allow-Origin: *');
-            header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-            header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-WP-Nonce');
-            header('Access-Control-Allow-Credentials: true');
+    private function remove_security_hooks() {
+        remove_action('init', array('SecurityWAF', 'waf_check'));
+        remove_action('init', array('BotBlackhole', 'check_bot_access'));
+        remove_action('init', array('BotBlocker', 'check_bot_request'));
+        
+        // Also remove CSP headers for API endpoints
+        remove_action('send_headers', array('SecurityHeaders', 'add_security_headers'));
+    }
+    
+    private function add_cors_headers($is_preflight = false) {
+        if (headers_sent()) {
+            return;
         }
+
+        // Special headers for PostHog
+        if ($this->is_posthog_request()) {
+            header('Access-Control-Allow-Origin: *');
+            header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+            header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-WP-Nonce, X-PostHog-Session-Id, X-PostHog-Token');
+            header('Access-Control-Allow-Credentials: true');
+            if ($is_preflight) {
+                header('Access-Control-Max-Age: 86400');
+            }
+            return;
+        }
+
+        // Standard API headers
+        header('Access-Control-Allow-Origin: *');
+        header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+        header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-WP-Nonce');
+        header('Access-Control-Allow-Credentials: true');
+        if ($is_preflight) {
+            header('Access-Control-Max-Age: 86400');
+        }
+    }
+    
+    private function is_posthog_request() {
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        return strpos($request_uri, '/sr-posthog/') !== false || 
+               strpos($request_uri, '/decide/') !== false ||
+               strpos($request_uri, '/e/') !== false;
     }
     
     private function is_api_request() {
-        $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-        $referer = $_SERVER['HTTP_REFERER'] ?? '';
         $request_uri = $_SERVER['REQUEST_URI'] ?? '';
         $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
         
-        // CRITICAL: Check for WooCommerce admin pages first
-        if (strpos($request_uri, '/wp-admin/admin.php?page=wc-admin') !== false) {
+        // 1. First check for PostHog endpoints
+        if ($this->is_posthog_request()) {
             return true;
         }
         
-        // Check for API indicators
+        // 2. Check for Shiprocket domains in origin
+        $shiprocket_domains = array(
+            'app.shiprocket.in',
+            'apiv2.shiprocket.in',
+            'api.shiprocket.in'
+        );
+        
+        foreach ($shiprocket_domains as $domain) {
+            if (stripos($origin, $domain) !== false) {
+                return true;
+            }
+        }
+        
+        // 3. Check for API indicators in URL
         $api_indicators = array(
-            'shiprocket',
-            'woocommerce',
-            'google',
-            'jetpack',
-            'merchant',
-            'rest_route=/wc/',
             '/wp-json/wc/',
-            '/wp-json/wc/gla/',
-            '/wp-json/jetpack/',
-            'consumer_key',
-            'consumer_secret',
-            'oauth',
-            'api_key'
+            '/wp-json/shiprocket/',
+            '/sr-api/',
+            'consumer_key=',
+            'consumer_secret='
         );
         
         foreach ($api_indicators as $indicator) {
-            if (stripos($user_agent, $indicator) !== false ||
-                stripos($referer, $indicator) !== false ||
-                stripos($request_uri, $indicator) !== false ||
-                stripos($origin, $indicator) !== false) {
+            if (stripos($request_uri, $indicator) !== false) {
                 return true;
             }
         }
         
-        // Check for WooCommerce REST API endpoints
-        if (strpos($request_uri, '/wp-json/wc/') !== false ||
-            strpos($request_uri, '/wp-json/wc-admin/') !== false ||
-            strpos($request_uri, '/wp-json/jetpack/') !== false) {
-            return true;
-        }
-        
-        // Check for authentication headers
+        // 4. Check for authentication headers
         if (isset($_SERVER['HTTP_AUTHORIZATION']) || 
             isset($_GET['consumer_key']) || 
-            isset($_POST['consumer_key']) ||
-            isset($_GET['oauth_token']) ||
-            isset($_POST['oauth_token'])) {
-            return true;
-        }
-        
-        // Check if origin is from known API domains
-        foreach ($this->api_domains as $domain) {
-            if (strpos($origin, $domain) !== false ||
-                strpos($referer, $domain) !== false) {
-                return true;
-            }
-        }
-        
-        // Check for WordPress admin AJAX requests
-        if (strpos($request_uri, '/wp-admin/admin-ajax.php') !== false ||
-            strpos($request_uri, '/wp-admin/') !== false) {
+            isset($_POST['consumer_key'])) {
             return true;
         }
         
@@ -182,5 +188,4 @@ class APIWhitelist {
     }
 }
 
-// Initialize API whitelist
 new APIWhitelist();
