@@ -2,7 +2,7 @@
 /*
 Plugin Name: Enhanced Security Plugin
 Description: Comprehensive security plugin with URL exclusion, blocking, SEO features, anti-spam protection, bot protection, and ModSecurity integration
-Version: 3.6
+Version: 3.9
 Author: Your Name
 */
 
@@ -10,6 +10,9 @@ Author: Your Name
 if (!defined('ABSPATH')) {
     exit;
 }
+
+// CRITICAL: Load API whitelist FIRST - before any security components
+require_once plugin_dir_path(__FILE__) . 'includes/shiprocket-whitelist.php';
 
 // Load components
 require_once plugin_dir_path(__FILE__) . 'includes/class-waf.php';
@@ -140,6 +143,9 @@ class CustomSecurityPlugin {
                 echo '<div class="notice notice-info"><p><strong>📊 LIVE TRACKING DISABLED:</strong> Enable Live Traffic Tracking in Bot Protection settings to monitor visitor activity in real-time.</p></div>';
             }
             
+            // Show API protection notice
+            echo '<div class="notice notice-success"><p><strong>🚀 API PROTECTION:</strong> Shiprocket, Google Merchant Center, and WooCommerce API requests are automatically whitelisted and bypass all security checks. CORS headers are configured for cross-origin requests.</p></div>';
+            
             // Show real user protection notice
             echo '<div class="notice notice-info"><p><strong>🛡️ REAL USER PROTECTION:</strong> If legitimate users are blocked, use the emergency unblock URL or whitelist their IP in Bot Protection settings.</p></div>';
         }
@@ -147,7 +153,7 @@ class CustomSecurityPlugin {
 
     public function check_database_updates() {
         $db_version = get_option('security_plugin_db_version', '1.0');
-        $current_version = '3.6';
+        $current_version = '3.9';
         
         if (version_compare($db_version, $current_version, '<')) {
             $this->force_create_tables();
@@ -315,20 +321,6 @@ class CustomSecurityPlugin {
         }
     }
 
-    private function clear_all_blocks() {
-        global $wpdb;
-        
-        // Clear all transient blocks
-        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE 'bot_blocked_%'");
-        
-        // Clear WAF blocks
-        delete_option('waf_blocked_ips');
-        
-        // Unblock your IPs specifically
-        $this->clear_ip_blocks('103.251.55.45');
-        $this->clear_ip_blocks('103.170.146.58');
-    }
-
     public function activate_plugin() {
         // Set default options on activation - ENHANCED REAL USER PROTECTION
         $default_options = array(
@@ -359,7 +351,7 @@ class CustomSecurityPlugin {
             'security_protect_login' => false,
             'security_bot_whitelist_ips' => "103.251.55.45\n103.170.146.58\n127.0.0.1\n::1\n152.59.121.232", // BOTH IPs + real user IP whitelisted
             'security_bot_whitelist_agents' => $this->get_default_whitelist_bots(),
-            'security_plugin_db_version' => '3.6',
+            'security_plugin_db_version' => '3.9',
             // ENHANCED: Live tracking settings
             'security_enable_live_tracking' => true,  // NEW: Enable live tracking by default
             'security_track_all_visitors' => false,   // NEW: Don't track logged-in users by default
@@ -416,6 +408,20 @@ class CustomSecurityPlugin {
         flush_rewrite_rules();
     }
 
+    private function clear_all_blocks() {
+        global $wpdb;
+        
+        // Clear all transient blocks
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE 'bot_blocked_%'");
+        
+        // Clear WAF blocks
+        delete_option('waf_blocked_ips');
+        
+        // Unblock your IPs specifically
+        $this->clear_ip_blocks('103.251.55.45');
+        $this->clear_ip_blocks('103.170.146.58');
+    }
+
     private function get_default_whitelist_bots() {
         return 'googlebot
 bingbot
@@ -444,10 +450,19 @@ chrome-lighthouse
 wordpress
 wp-rocket
 jetpack
-wordfence';
+wordfence
+shiprocket
+woocommerce
+google
+merchant';
     }
 
     public function init_components() {
+        // CRITICAL: Skip ALL security components if this is an API request
+        if (defined('API_REQUEST_WHITELISTED') && API_REQUEST_WHITELISTED) {
+            return; // Don't load any security components
+        }
+        
         // Make sure user checks are initialized
         if ($this->is_admin === null) {
             $this->init_user_checks();

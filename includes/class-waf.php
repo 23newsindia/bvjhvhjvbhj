@@ -80,6 +80,11 @@ class SecurityWAF {
     }
 
     public function waf_check() {
+        // CRITICAL: Skip all checks if this is an API request
+        if (defined('API_REQUEST_WHITELISTED') && API_REQUEST_WHITELISTED) {
+            return;
+        }
+        
         // CRITICAL: Skip all checks for logged-in users and admins - FIRST CHECK
         if (self::$is_logged_in || self::$current_user_can_manage) {
             return;
@@ -87,6 +92,11 @@ class SecurityWAF {
         
         // CRITICAL: Skip ALL WooCommerce AJAX requests - NEVER BLOCK THESE
         if ($this->is_woocommerce_ajax_request()) {
+            return;
+        }
+        
+        // CRITICAL: Skip WooCommerce admin and API requests
+        if ($this->is_woocommerce_admin_request()) {
             return;
         }
         
@@ -118,6 +128,28 @@ class SecurityWAF {
         }
 
         $this->check_attack_patterns($ip);
+    }
+
+    private function is_woocommerce_admin_request() {
+        $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+        
+        // Check for WooCommerce admin patterns
+        $wc_admin_patterns = array(
+            '/wp-admin/admin.php?page=wc-admin',
+            '/wp-json/wc/gla/',
+            '/wp-json/wc-admin/',
+            '/wp-json/jetpack/',
+            'page=wc-admin',
+            'wc-admin'
+        );
+        
+        foreach ($wc_admin_patterns as $pattern) {
+            if (strpos($request_uri, $pattern) !== false) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     private function is_legitimate_browser($user_agent) {
